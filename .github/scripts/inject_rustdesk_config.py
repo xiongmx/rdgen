@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import os
 import re
 import sys
@@ -59,6 +60,30 @@ def _replace_port(text: str, name: str, value: int) -> str:
     return updated
 
 
+def _rust_string_literal(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _default_settings_initializer(server: str, port: int, public_key: str, api_server: str) -> str:
+    settings = (
+        ("custom-rendezvous-server", f"{server}:{port}"),
+        ("relay-server", f"{server}:{port + 1}"),
+        ("api-server", api_server),
+        ("key", public_key),
+    )
+    lines = [
+        "pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = {",
+        "        let mut settings = HashMap::new();",
+    ]
+    for name, value in settings:
+        lines.append(
+            f"        settings.insert({_rust_string_literal(name)}.to_owned(), "
+            f"{_rust_string_literal(value)}.to_owned());"
+        )
+    lines.extend(("        RwLock::new(settings)", "    };"))
+    return "\n".join(lines)
+
+
 def patch_source(root: Path, server: str, port_text: str, public_key: str, api_server: str) -> None:
     port = validate_config(server, port_text, public_key, api_server)
     config_path = root / "libs/hbb_common/src/config.rs"
@@ -83,6 +108,12 @@ def patch_source(root: Path, server: str, port_text: str, public_key: str, api_s
     )
     for offset, name in enumerate(PORT_CONSTANTS):
         config_text = _replace_port(config_text, name, port + offset)
+    config_text = _replace_one(
+        config_text,
+        "pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = Default::default();",
+        _default_settings_initializer(server, port, public_key, api_server),
+        "DEFAULT_SETTINGS initializer",
+    )
 
     api_count = common_text.count(DEFAULT_API_SERVER)
     if api_count < 1:
@@ -97,12 +128,25 @@ def patch_source(root: Path, server: str, port_text: str, public_key: str, api_s
         expected = f"pub const {name}: i32 = {value};"
         if expected not in config_text:
             raise ValueError(f"Verified {name} value is missing after replacement")
+    expected_defaults = (
+        ("custom-rendezvous-server", f"{server}:{port}"),
+        ("relay-server", f"{server}:{port + 1}"),
+        ("api-server", api_server),
+        ("key", public_key),
+    )
+    for name, value in expected_defaults:
+        expected = (
+            f"settings.insert({_rust_string_literal(name)}.to_owned(), "
+            f"{_rust_string_literal(value)}.to_owned());"
+        )
+        if expected not in config_text:
+            raise ValueError(f"Verified default setting {name} is missing after replacement")
     if api_server not in common_text:
         raise ValueError("API server URL did not survive source replacement")
 
     config_path.write_text(config_text, encoding="utf-8")
     common_path.write_text(common_text, encoding="utf-8")
-    print("Verified source replacements for server host, all four ports, public key, and API URL.")
+    print("Verified source replacements and defaults for ID, relay, API, key, and all four ports.")
 
 
 def verify_android_apk(apk_path: Path, server: str, port_text: str, public_key: str, api_server: str) -> None:
@@ -117,6 +161,8 @@ def verify_android_apk(apk_path: Path, server: str, port_text: str, public_key: 
         native = apk.read(libraries[0])
         expected = {
             "server host": server.encode("utf-8"),
+            "ID server option": f"{server}:{port_text}".encode("utf-8"),
+            "relay server option": f"{server}:{int(port_text) + 1}".encode("utf-8"),
             "public key": public_key.encode("ascii"),
             "API URL": api_server.encode("utf-8"),
         }
@@ -130,7 +176,7 @@ def verify_android_apk(apk_path: Path, server: str, port_text: str, public_key: 
         assets = [name for name in names if name.endswith("/assets/custom_.txt")]
         if any(apk.read(name).strip() for name in assets):
             raise ValueError("APK contains an unexpected unsigned custom-client payload")
-    print("Verified Android APK contains the configured server host, public key, and API URL.")
+    print("Verified Android APK contains the displayed server defaults and server constants.")
 
 
 def required_env(name: str) -> str:
