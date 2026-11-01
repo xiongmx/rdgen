@@ -56,8 +56,8 @@ class ConfigInjectionTests(unittest.TestCase):
         for name, value in zip(inject.PORT_CONSTANTS, (24116, 24117, 24118, 24119)):
             self.assertIn(f"pub const {name}: i32 = {value};", config)
         for name, value in (
-            ("custom-rendezvous-server", "rd.example.test:24116"),
-            ("relay-server", "rd.example.test:24117"),
+            ("custom-rendezvous-server", "rd.example.test"),
+            ("relay-server", ""),
             ("api-server", self.api),
             ("key", self.key),
         ):
@@ -75,13 +75,7 @@ class ConfigInjectionTests(unittest.TestCase):
 
     def test_android_apk_verification_requires_embedded_server_values(self):
         apk_path = self.root / "client.apk"
-        library = (
-            self.server.encode()
-            + f"{self.server}:{self.port}".encode()
-            + f"{self.server}:{int(self.port) + 1}".encode()
-            + self.key.encode()
-            + self.api.encode()
-        )
+        library = self.server.encode() + self.key.encode() + self.api.encode()
         with zipfile.ZipFile(apk_path, "w") as apk:
             apk.writestr("lib/armeabi-v7a/librustdesk.so", library)
         inject.verify_android_apk(apk_path, self.server, self.port, self.key, self.api)
@@ -90,6 +84,15 @@ class ConfigInjectionTests(unittest.TestCase):
             apk.writestr("lib/armeabi-v7a/librustdesk.so", self.key.encode() + self.api.encode())
         with self.assertRaises(ValueError):
             inject.verify_android_apk(apk_path, self.server, self.port, self.key, self.api)
+
+        for explicit_endpoint in (self.port, str(int(self.port) + 1)):
+            with zipfile.ZipFile(apk_path, "w") as apk:
+                apk.writestr(
+                    "lib/armeabi-v7a/librustdesk.so",
+                    library + f"{self.server}:{explicit_endpoint}".encode(),
+                )
+            with self.assertRaises(ValueError):
+                inject.verify_android_apk(apk_path, self.server, self.port, self.key, self.api)
 
 
 if __name__ == "__main__":

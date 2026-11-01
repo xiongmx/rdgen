@@ -64,10 +64,10 @@ def _rust_string_literal(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _default_settings_initializer(server: str, port: int, public_key: str, api_server: str) -> str:
+def _default_settings_initializer(server: str, public_key: str, api_server: str) -> str:
     settings = (
-        ("custom-rendezvous-server", f"{server}:{port}"),
-        ("relay-server", f"{server}:{port + 1}"),
+        ("custom-rendezvous-server", server),
+        ("relay-server", ""),
         ("api-server", api_server),
         ("key", public_key),
     )
@@ -111,7 +111,7 @@ def patch_source(root: Path, server: str, port_text: str, public_key: str, api_s
     config_text = _replace_one(
         config_text,
         "pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = Default::default();",
-        _default_settings_initializer(server, port, public_key, api_server),
+        _default_settings_initializer(server, public_key, api_server),
         "DEFAULT_SETTINGS initializer",
     )
 
@@ -129,8 +129,8 @@ def patch_source(root: Path, server: str, port_text: str, public_key: str, api_s
         if expected not in config_text:
             raise ValueError(f"Verified {name} value is missing after replacement")
     expected_defaults = (
-        ("custom-rendezvous-server", f"{server}:{port}"),
-        ("relay-server", f"{server}:{port + 1}"),
+        ("custom-rendezvous-server", server),
+        ("relay-server", ""),
         ("api-server", api_server),
         ("key", public_key),
     )
@@ -161,14 +161,19 @@ def verify_android_apk(apk_path: Path, server: str, port_text: str, public_key: 
         native = apk.read(libraries[0])
         expected = {
             "server host": server.encode("utf-8"),
-            "ID server option": f"{server}:{port_text}".encode("utf-8"),
-            "relay server option": f"{server}:{int(port_text) + 1}".encode("utf-8"),
             "public key": public_key.encode("ascii"),
             "API URL": api_server.encode("utf-8"),
         }
         missing = [label for label, value in expected.items() if value not in native]
         if missing:
             raise ValueError("APK native library is missing configured value(s): " + ", ".join(missing))
+        explicit_ports = {
+            "ID server option with explicit port": f"{server}:{port_text}".encode("utf-8"),
+            "relay server option that should be blank": f"{server}:{int(port_text) + 1}".encode("utf-8"),
+        }
+        unexpected = [label for label, value in explicit_ports.items() if value in native]
+        if unexpected:
+            raise ValueError("APK contains unexpected server setting(s): " + ", ".join(unexpected))
 
         # Auto-release configuration has no RDGen signing key, so no custom-client
         # payload is generated. Reject a non-empty asset instead of shipping an
@@ -176,7 +181,7 @@ def verify_android_apk(apk_path: Path, server: str, port_text: str, public_key: 
         assets = [name for name in names if name.endswith("/assets/custom_.txt")]
         if any(apk.read(name).strip() for name in assets):
             raise ValueError("APK contains an unexpected unsigned custom-client payload")
-    print("Verified Android APK contains the displayed server defaults and server constants.")
+    print("Verified Android APK contains host-only ID defaults, blank relay, API, and key.")
 
 
 def required_env(name: str) -> str:
