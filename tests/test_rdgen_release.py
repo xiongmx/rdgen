@@ -31,7 +31,10 @@ class GenerateForm(forms.Form):
             "1.5.1",
         )
         self.assertEqual(rdgen_release.select_build_version(["1.5.0"], []), "1.5.0")
-        self.assertIsNone(rdgen_release.select_build_version(["1.5.0"], [], "1.5.0"))
+        self.assertEqual(rdgen_release.select_build_version(["1.5.0"], [], "1.5.0"), "1.5.0")
+        self.assertIsNone(rdgen_release.select_build_version(["1.5.0"], ["1.5.0"], "1.5.0"))
+        self.assertIsNone(rdgen_release.select_build_version(["1.5.0"], ["1.6.0"], "1.5.0"))
+        self.assertIsNone(rdgen_release.select_build_version(["1.4.9"], [], "1.5.0"))
         self.assertEqual(
             rdgen_release.select_build_version(["1.5.0", "1.5.1"], [], "1.5.0"),
             "1.5.1",
