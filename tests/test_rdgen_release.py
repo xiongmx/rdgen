@@ -1,6 +1,4 @@
-import base64
 import importlib.util
-import json
 import os
 import sys
 import unittest
@@ -58,7 +56,7 @@ class GenerateForm(forms.Form):
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_fixed_server_values_are_emitted_and_custom_settings_match_rdgen_defaults(self):
+    def test_fixed_server_values_are_emitted_without_unsigned_custom_payload(self):
         env = {
             "RUSTDESK_SERVER": "rustdesk.xiongmx.com",
             "RUSTDESK_SERVER_PORT": "21116",
@@ -71,13 +69,9 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config["serverPort"], "21116")
         self.assertEqual(config["apiServer"], env["RUSTDESK_API_SERVER"])
         self.assertEqual(config["key"], env["RUSTDESK_PUBLIC_KEY"])
+        self.assertEqual(config["custom"], "")
         self.assertEqual(config["rdgen"], "false")
         self.assertEqual(config["genurl"], "")
-        custom = json.loads(base64.b64decode(config["custom"]))
-        self.assertEqual(custom["conn-type"], "both")
-        self.assertEqual(custom["default-settings"]["access-mode"], "custom")
-        self.assertEqual(custom["enable-lan-discovery"], "Y")
-        self.assertEqual(custom["allow-auto-disconnect"], "N")
 
     def test_rejects_invalid_port_and_key(self):
         base = {
@@ -86,7 +80,11 @@ class ConfigurationTests(unittest.TestCase):
             "RUSTDESK_API_SERVER": "https://rustdesk.xiongmx.com",
             "RUSTDESK_PUBLIC_KEY": "LOesLO6ZiBDbvmrUhwMjjTl240UQWziRe7nWrvmOpdY=",
         }
-        for field, value in (("RUSTDESK_SERVER_PORT", "bad"), ("RUSTDESK_PUBLIC_KEY", "invalid")):
+        for field, value in (
+            ("RUSTDESK_SERVER_PORT", "bad"),
+            ("RUSTDESK_SERVER_PORT", "65533"),
+            ("RUSTDESK_PUBLIC_KEY", "invalid"),
+        ):
             env = {**base, field: value}
             with self.subTest(field=field), mock.patch.dict(os.environ, env, clear=True):
                 with self.assertRaises(ValueError):

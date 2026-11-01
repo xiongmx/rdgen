@@ -13,7 +13,6 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
 
 UPSTREAM_OWNER = "bryangerlach"
 UPSTREAM_REPO = "rdgen"
@@ -140,36 +139,6 @@ def detect_remote() -> tuple[str | None, str]:
     ), upstream_sha
 
 
-def default_custom_settings() -> dict[str, Any]:
-    """Mirror RDGen's current default settings for bidirectional clients."""
-    return {
-        "conn-type": "both",
-        "enable-lan-discovery": "Y",
-        "allow-auto-disconnect": "N",
-        "default-settings": {
-            "access-mode": "custom",
-            "enable-keyboard": "Y",
-            "enable-clipboard": "Y",
-            "enable-file-transfer": "Y",
-            "enable-audio": "Y",
-            "enable-tunnel": "Y",
-            "enable-remote-restart": "Y",
-            "enable-record-session": "Y",
-            "enable-block-input": "Y",
-            "allow-remote-config-modification": "N",
-            "direct-server": "N",
-            "verification-method": "use-both-passwords",
-            "approve-mode": "password-click",
-            "allow-hide-cm": "N",
-            "allow-remove-wallpaper": "Y",
-            "enable-remote-printer": "Y",
-            "enable-camera": "Y",
-            "enable-terminal": "Y",
-        },
-        "override-settings": {},
-    }
-
-
 def build_config() -> dict[str, str]:
     server = os.environ.get("RUSTDESK_SERVER", "")
     port = os.environ.get("RUSTDESK_SERVER_PORT", "")
@@ -177,16 +146,16 @@ def build_config() -> dict[str, str]:
     public_key = os.environ.get("RUSTDESK_PUBLIC_KEY", "")
     if not server or not re.fullmatch(r"[A-Za-z0-9.-]+", server):
         raise ValueError("RUSTDESK_SERVER must be a valid host name")
-    if not port.isdigit() or not 1 <= int(port) <= 65535:
-        raise ValueError("RUSTDESK_SERVER_PORT must be a valid TCP port")
+    if not port.isdigit() or not 1 <= int(port) <= 65532:
+        raise ValueError("RUSTDESK_SERVER_PORT must allow three derived ports (1-65532)")
     if not api_server.startswith("https://") or any(ch in api_server for ch in "\r\n|\""):
         raise ValueError("RUSTDESK_API_SERVER must be an HTTPS URL")
     if not re.fullmatch(r"[A-Za-z0-9+/]{43}=", public_key):
         raise ValueError("RUSTDESK_PUBLIC_KEY must be a base64 Ed25519 public key")
 
-    custom = base64.b64encode(
-        json.dumps(default_custom_settings(), separators=(",", ":")).encode("ascii")
-    ).decode("ascii")
+    # RustDesk's read_custom_client() requires an Ed25519-signed payload.
+    # This automatic path has no signing key, so do not synthesize unsigned JSON.
+    custom = ""
     values = {
         "server": server,
         "serverPort": port,
