@@ -90,23 +90,13 @@ def published_versions(releases: list[dict[str, Any]]) -> list[str]:
 def select_build_version(
     supported: list[str], published: list[str], baseline: str = ""
 ) -> str | None:
-    """Return the newest supported tag, bootstrapping a missing baseline release."""
+    """Return the newest supported stable tag above the latest published build."""
     if not supported:
         raise ValueError("No supported versions were supplied")
     latest_supported = max(supported, key=version_key)
     watermarks = list(published)
     if baseline:
-        baseline_key = version_key(baseline)
-        latest_key = version_key(latest_supported)
-        if latest_key < baseline_key:
-            return None
-        if latest_key == baseline_key:
-            # A configured baseline is a minimum, not proof that its assets
-            # were ever published. Build it once unless it or a newer version
-            # already has a complete EXE+APK release.
-            if any(version_key(version) >= baseline_key for version in published):
-                return None
-            return latest_supported
+        version_key(baseline)
         watermarks.append(baseline)
     if not watermarks:
         return latest_supported
