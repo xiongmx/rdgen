@@ -49,6 +49,11 @@ on:
         required: false
         default: ''
         type: string
+      release_exe_only:
+        description: Build and upload only the Windows x64 EXE for the automatic release
+        required: false
+        default: false
+        type: boolean
 
 
 env:
@@ -743,7 +748,7 @@ jobs:
 
       - name: Build msi
         continue-on-error: true
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: ${{ env.UPLOAD_ARTIFACT == 'true' && inputs.release_exe_only != true }}
         run: |
           pushd ./res/msi
           python preprocess.py --app-name "${{ env.appname }}" --arp -d ../../rustdesk
@@ -757,7 +762,10 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          Compress-Archive -Path ./SignOutput/*.exe, ./SignOutput/*.msi -DestinationPath ./SignOutput/unsigned_files.zip -CompressionLevel Fastest
+          $releaseFiles = @()
+          if (Test-Path ./SignOutput/rustdesk.exe) { $releaseFiles += "./SignOutput/rustdesk.exe" }
+          if (Test-Path ./SignOutput/rustdesk.msi) { $releaseFiles += "./SignOutput/rustdesk.msi" }
+          Compress-Archive -Path $releaseFiles -DestinationPath ./SignOutput/unsigned_files.zip -CompressionLevel Fastest
 
       - name: sign exe and msi
         continue-on-error: true
@@ -790,8 +798,17 @@ jobs:
         run: |
           mv ./SignOutput/rustdesk.msi "./SignOutput/${{ env.filename }}.msi" || echo "rustdesk"
 
+      - name: Upload Windows x64 EXE release asset
+        if: ${{ inputs.release_mode == true && inputs.release_exe_only == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64-${{ env.VERSION }}
+          path: ./SignOutput/${{ env.filename }}.exe
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload Windows x64 release assets
-        if: ${{ inputs.release_mode == true }}
+        if: ${{ inputs.release_mode == true && inputs.release_exe_only != true }}
         uses: actions/upload-artifact@v4
         with:
           name: release-windows-x64-${{ env.VERSION }}

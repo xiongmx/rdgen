@@ -49,6 +49,11 @@ on:
         required: false
         default: ''
         type: string
+      release_armv7_only:
+        description: Build only the Android armv7 APK for the automatic release
+        required: false
+        default: false
+        type: boolean
 
 
 env:
@@ -89,35 +94,29 @@ jobs:
       version: ${{ inputs.version }}
       artifact_name: bridge-artifact-android
 
+  select_android_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - id: select
+        shell: bash
+        env:
+          ARMV7_ONLY: ${{ inputs.release_armv7_only }}
+        run: |
+          if [[ "$ARMV7_ONLY" == "true" ]]; then
+            echo 'matrix={"job":[{"arch":"armv7","target":"armv7-linux-androideabi","os":"ubuntu-24.04","reltype":"release","suffix":""}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"job":[{"arch":"aarch64","target":"aarch64-linux-android","os":"ubuntu-24.04","reltype":"release","suffix":""},{"arch":"armv7","target":"armv7-linux-androideabi","os":"ubuntu-24.04","reltype":"release","suffix":""},{"arch":"x86_64","target":"x86_64-linux-android","os":"ubuntu-24.04","reltype":"release","suffix":""}]}' >> "$GITHUB_OUTPUT"
+          fi
+
   build-rustdesk-android:
-    needs: [generate-bridge-linux, setup]
+    needs: [generate-bridge-linux, setup, select_android_matrix]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
-      matrix:
-        job:
-          - {
-              arch: aarch64,
-              target: aarch64-linux-android,
-              os: ubuntu-24.04,
-              reltype: release,
-              suffix: "",
-            }
-          - {
-              arch: armv7,
-              target: armv7-linux-androideabi,
-              os: ubuntu-24.04,
-              reltype: release,
-              suffix: "",
-            }
-          - {
-              arch: x86_64,
-              target: x86_64-linux-android,
-              os: ubuntu-24.04,
-              reltype: release,
-              suffix: "",
-            }
+      matrix: ${{ fromJSON(needs.select_android_matrix.outputs.matrix) }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4

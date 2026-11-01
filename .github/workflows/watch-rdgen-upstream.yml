@@ -1,4 +1,4 @@
-name: Build Windows x64 and Android when RDGen supports a newer RustDesk client
+name: Build Windows x64 EXE and Android armv7 APK when RDGen supports a newer RustDesk client
 
 on:
   schedule:
@@ -59,6 +59,7 @@ jobs:
     with:
       version: ${{ needs.detect.outputs.version }}
       release_mode: true
+      release_exe_only: true
       secrets_json_b64: ${{ needs.config.outputs.secrets_json_b64 }}
     secrets: inherit
 
@@ -69,6 +70,7 @@ jobs:
     with:
       version: ${{ needs.detect.outputs.version }}
       release_mode: true
+      release_armv7_only: true
       secrets_json_b64: ${{ needs.config.outputs.secrets_json_b64 }}
     secrets: inherit
 
@@ -77,35 +79,40 @@ jobs:
     if: ${{ needs.detect.outputs.build_needed == 'true' && needs.build_windows_x64.result == 'success' && needs.build_android.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Download Windows x64 and Android build artifacts
+      - name: Download Windows x64 EXE and Android armv7 APK build artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: release-*
           path: release-assets
           merge-multiple: true
 
-      - name: Verify target assets and create checksums
+      - name: Verify target assets, add versioned names, and create checksums
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.detect.outputs.version }}
         run: |
           set -euo pipefail
           test -d release-assets
+          test -s release-assets/rustdesk.exe
+          test -s release-assets/rustdesk-armv7.apk
+          mv release-assets/rustdesk.exe "release-assets/rustdesk-${RELEASE_VERSION}.exe"
+          mv release-assets/rustdesk-armv7.apk "release-assets/rustdesk-${RELEASE_VERSION}-armv7.apk"
           find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
-          compgen -G 'release-assets/*.exe' >/dev/null
-          compgen -G 'release-assets/*.apk' >/dev/null
-          (cd release-assets && find . -maxdepth 1 -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.apk' \) -print0 | xargs -0 sha256sum > SHA256SUMS.txt)
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 2
+          (cd release-assets && find . -maxdepth 1 -type f \( -name '*.exe' -o -name '*.apk' \) -print0 | xargs -0 sha256sum > SHA256SUMS.txt)
           test -s release-assets/SHA256SUMS.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: rdgen-rustdesk-${{ needs.detect.outputs.version }}
-          name: RustDesk ${{ needs.detect.outputs.version }} — Windows x64 and Android
+          name: RustDesk ${{ needs.detect.outputs.version }} — Windows x64 EXE and Android armv7 APK
           target_commitish: ${{ github.sha }}
           body: |
             Built from the RustDesk version that RDGen upstream currently lists as supported.
 
-            - Windows x64: portable EXE and MSI when available
-            - Android: APK builds for the supported arm64, armv7, and x86_64 targets
+            - Windows x64: portable EXE only
+            - Android: armv7 APK only
             - RDGen upstream commit at detection time: `${{ needs.detect.outputs.upstream_sha }}`
 
             Server settings are embedded from the `rustdesk` GitHub Environment.
