@@ -3,7 +3,8 @@ description: 'Decrypts a zip and masks the JSON contents as env vars'
 inputs:
   zip_password:
     description: 'Password for the Zip'
-    required: true
+    required: false
+    default: ''
   zip_path:
     description: 'Path to the encrypted zip'
     required: false
@@ -21,12 +22,15 @@ runs:
       env:
         PYTHONUTF8: "1"
         PYTHONIOENCODING: "utf-8"
+        ZIP_PASSWORD: ${{ inputs.zip_password }}
+        ZIP_PATH: ${{ inputs.zip_path }}
       run: |
-        import sys
         import io
-        import pyzipper
         import json
         import os
+        import sys
+        import zipfile
+        import pyzipper
 
         # Force UTF-8 stdout/stderr so secrets with characters outside
         # the runner codepage (CJK, emoji, etc.) do not crash this step
@@ -34,10 +38,28 @@ runs:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-        with pyzipper.AESZipFile('${{ inputs.zip_path }}') as zf:
-            zf.setpassword('${{ inputs.zip_password }}'.encode())
-            with zf.open('secrets.json') as f:
-                secrets = json.load(f)
+        zip_path = os.environ.get('ZIP_PATH', 'secrets.zip')
+        password = os.environ.get('ZIP_PASSWORD', '').encode()
+        with zipfile.ZipFile(zip_path) as archive:
+            matches = [item for item in archive.infolist() if item.filename == 'secrets.json']
+            if len(matches) != 1:
+                raise SystemExit('Configuration archive must contain exactly one root secrets.json')
+            info = matches[0]
+            if info.flag_bits & 0x1:
+                with pyzipper.AESZipFile(zip_path) as encrypted:
+                    encrypted.setpassword(password)
+                    with encrypted.open('secrets.json') as source:
+                        secrets = json.load(source)
+            else:
+                with archive.open(info) as source:
+                    secrets = json.load(source)
+
+        if not isinstance(secrets, dict) or not secrets:
+            raise SystemExit('Configuration must be a non-empty JSON object')
+        if any(not isinstance(key, str) or not isinstance(value, str) for key, value in secrets.items()):
+            raise SystemExit('Configuration keys and values must all be strings')
+        if any('\n' in value or '\r' in value for value in secrets.values()):
+            raise SystemExit('Configuration values cannot contain newlines')
 
         with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env_file:
             for key, value in secrets.items():

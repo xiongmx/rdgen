@@ -12,24 +12,34 @@ on:
           default: true
         target:
             description: 'Target'
-            required: true
+            required: false
             type: string
             default: 'windows-2022'
         configuration:
             description: 'Configuration'
-            required: true
+            required: false
             type: string
             default: 'Release'
         platform:
             description: 'Platform'
-            required: true
+            required: false
             type: string
             default: 'x64'
         target_version:
             description: 'TargetVersion'
-            required: true
+            required: false
             type: string
             default: 'Windows10'
+        config_artifact_name:
+            description: 'Name of the configuration artifact to download'
+            required: false
+            type: string
+            default: 'encrypted-secrets-zip'
+        release_mode:
+            description: 'Skip RDGen server callbacks for Release builds'
+            required: false
+            type: boolean
+            default: false
 
 env:
   project_path: WindowInjection/WindowInjection.vcxproj
@@ -50,7 +60,7 @@ jobs:
 
       - uses: actions/download-artifact@v5
         with:
-          name: encrypted-secrets-zip
+          name: ${{ inputs.config_artifact_name }}
 
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
@@ -58,7 +68,7 @@ jobs:
           zip_password: ${{ secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
-        if: always() # Run even if previous steps fail
+        if: ${{ always() && inputs.release_mode != true }}
         continue-on-error: true
         uses: fjogeleit/http-request-action@v1
         with:

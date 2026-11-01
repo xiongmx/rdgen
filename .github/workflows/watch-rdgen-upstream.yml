@@ -1,0 +1,117 @@
+name: Build Windows x64 and Android when RDGen supports a newer RustDesk client
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rdgen-supported-client-release
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    environment: rustdesk
+    outputs:
+      build_needed: ${{ steps.detect.outputs.build_needed }}
+      version: ${{ steps.detect.outputs.version }}
+      upstream_sha: ${{ steps.detect.outputs.upstream_sha }}
+    steps:
+      - name: Checkout fork scripts
+        uses: actions/checkout@v4
+
+      - name: Compare RDGen-supported versions with completed Releases
+        id: detect
+        run: python3 .github/scripts/rdgen_release.py detect
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RDGEN_BASELINE_VERSION: ${{ vars.RDGEN_BASELINE_VERSION }}
+
+  config:
+    needs: detect
+    if: ${{ needs.detect.outputs.build_needed == 'true' }}
+    runs-on: ubuntu-latest
+    environment: rustdesk
+    outputs:
+      secrets_json_b64: ${{ steps.config.outputs.secrets_json_b64 }}
+    steps:
+      - name: Checkout fork scripts
+        uses: actions/checkout@v4
+
+      - name: Validate fixed environment and encode RDGen build config
+        id: config
+        run: python3 .github/scripts/rdgen_release.py config
+        env:
+          RUSTDESK_SERVER: ${{ vars.RUSTDESK_SERVER }}
+          RUSTDESK_SERVER_PORT: ${{ vars.RUSTDESK_SERVER_PORT }}
+          RUSTDESK_API_SERVER: ${{ vars.RUSTDESK_API_SERVER }}
+          RUSTDESK_PUBLIC_KEY: ${{ vars.RUSTDESK_PUBLIC_KEY }}
+
+  build_windows_x64:
+    needs: [detect, config]
+    if: ${{ needs.detect.outputs.build_needed == 'true' }}
+    uses: ./.github/workflows/generator-windows.yml
+    with:
+      version: ${{ needs.detect.outputs.version }}
+      release_mode: true
+      secrets_json_b64: ${{ needs.config.outputs.secrets_json_b64 }}
+    secrets: inherit
+
+  build_android:
+    needs: [detect, config]
+    if: ${{ needs.detect.outputs.build_needed == 'true' }}
+    uses: ./.github/workflows/generator-android.yml
+    with:
+      version: ${{ needs.detect.outputs.version }}
+      release_mode: true
+      secrets_json_b64: ${{ needs.config.outputs.secrets_json_b64 }}
+    secrets: inherit
+
+  publish_release:
+    needs: [detect, build_windows_x64, build_android]
+    if: ${{ needs.detect.outputs.build_needed == 'true' && needs.build_windows_x64.result == 'success' && needs.build_android.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows x64 and Android build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify target assets and create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d release-assets
+          find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
+          compgen -G 'release-assets/*.exe' >/dev/null
+          compgen -G 'release-assets/*.apk' >/dev/null
+          (cd release-assets && find . -maxdepth 1 -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.apk' \) -print0 | xargs -0 sha256sum > SHA256SUMS.txt)
+          test -s release-assets/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rdgen-rustdesk-${{ needs.detect.outputs.version }}
+          name: RustDesk ${{ needs.detect.outputs.version }} — Windows x64 and Android
+          target_commitish: ${{ github.sha }}
+          body: |
+            Built from the RustDesk version that RDGen upstream currently lists as supported.
+
+            - Windows x64: portable EXE and MSI when available
+            - Android: APK builds for the supported arm64, armv7, and x86_64 targets
+            - RDGen upstream commit at detection time: `${{ needs.detect.outputs.upstream_sha }}`
+
+            Server settings are embedded from the `rustdesk` GitHub Environment.
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

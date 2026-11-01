@@ -29,3 +29,8 @@ Save your configuration from the rdgen web interface, or generate your own, then
 - Avoid special characters or non-English characters in app name and file name
 - Build time is currently 30 - 45 minutes
 
+## Automated Windows x64 and Android releases
+
+The `Build Windows x64 and Android when RDGen supports a newer RustDesk client` workflow checks the upstream RDGen version choices every six hours. It builds only after upstream RDGen lists a newer stable RustDesk version than the latest complete release in this fork; RustDesk release events alone do not trigger a build. A release is published only when both platform builds succeed.
+
+The workflow reads its fixed server settings from the GitHub Environment named `rustdesk`: `RUSTDESK_SERVER`, `RUSTDESK_SERVER_PORT`, `RUSTDESK_API_SERVER`, and `RUSTDESK_PUBLIC_KEY`. `RDGEN_BASELINE_VERSION` records the support level at setup, so that existing supported versions do not trigger an initial build. It produces a Windows x64 EXE/MSI (when the MSI build succeeds) and Android APKs for arm64, armv7, and x86_64. It does not send build files to the RDGen web service or RustDesk API server.

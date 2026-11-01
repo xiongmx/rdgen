@@ -18,6 +18,37 @@ on:
         required: false
         default: ''
         type: string
+      release_mode:
+        description: 'Build assets for the automatic GitHub Release workflow'
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      version:
+        description: RustDesk release tag selected by RDGen upstream
+        required: true
+        type: string
+      zip_url:
+        description: Existing RDGen encrypted configuration URL JSON
+        required: false
+        default: ''
+        type: string
+      app_version:
+        description: Optional custom app version string
+        required: false
+        default: ''
+        type: string
+      release_mode:
+        description: Build assets for the automatic GitHub Release workflow
+        required: false
+        default: false
+        type: boolean
+      secrets_json_b64:
+        description: Base64-encoded RDGen build configuration JSON
+        required: false
+        default: ''
+        type: string
 
 
 env:
@@ -31,7 +62,6 @@ env:
   ANDROID_FLUTTER_VERSION: "3.24.5" 
   # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
-  TAG_NAME: "${{ inputs.upload-tag }}"
   VCPKG_BINARY_SOURCES: "clear"
   # vcpkg version: 2024.07.12
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
@@ -51,11 +81,14 @@ jobs:
     uses: ./.github/workflows/fetch-encrypted-secrets.yml
     with:
       zip_url_json: ${{ inputs.zip_url }}
+      secrets_json_b64: ${{ inputs.secrets_json_b64 }}
+      artifact_name: encrypted-secrets-zip-windows
 
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
     with:
       version: ${{ inputs.version }}
+      artifact_name: bridge-artifact-windows
 
   build-RustDeskTempTopMostWindow:
     needs: setup
@@ -67,6 +100,8 @@ jobs:
       configuration: Release
       platform: x64
       target_version: Windows10
+      config_artifact_name: encrypted-secrets-zip-windows
+      release_mode: ${{ inputs.release_mode }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -96,7 +131,7 @@ jobs:
         
       - uses: actions/download-artifact@v4
         with:
-          name: encrypted-secrets-zip
+          name: encrypted-secrets-zip-windows
 
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
@@ -104,7 +139,7 @@ jobs:
           zip_password: ${{ secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
-        if: always() # Run even if previous steps fail
+        if: ${{ always() && inputs.release_mode != true }}
         continue-on-error: true
         uses: fjogeleit/http-request-action@v1
         with:
@@ -114,19 +149,19 @@ jobs:
           data: '{"uuid": "${{ env.uuid }}"}'
 
       - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       
       - name: Set rdgen value
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'true' }}
         run: |
           echo "STATUS_URL=${{ secrets.GENURL }}/updategh" >> $env:GITHUB_ENV
 
       - name: Set rdgen value
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'false' }}
         run: |
           echo "STATUS_URL=${{ env.apiServer }}/api/updategh" >> $env:GITHUB_ENV
 
@@ -168,7 +203,7 @@ jobs:
       - name: Restore bridge files
         uses: actions/download-artifact@master
         with:
-          name: bridge-artifact
+          name: bridge-artifact-windows
           path: ./
 
       - name: Install ImageMagick on Windows
@@ -755,8 +790,19 @@ jobs:
         run: |
           mv ./SignOutput/rustdesk.msi "./SignOutput/${{ env.filename }}.msi" || echo "rustdesk"
 
+      - name: Upload Windows x64 release assets
+        if: ${{ inputs.release_mode == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64-${{ env.VERSION }}
+          path: |
+            ./SignOutput/${{ env.filename }}.exe
+            ./SignOutput/${{ env.filename }}.msi
+          if-no-files-found: error
+          retention-days: 7
+
       - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'true' }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
@@ -768,7 +814,7 @@ jobs:
             curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.msi" -F "uuid=${{ env.uuid }}" ${{ secrets.GENURL }}/save_custom_client || true
 
       - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'false' }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
@@ -783,9 +829,9 @@ jobs:
     needs: [build-for-windows-flutter]
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: always()
+    if: ${{ always() && inputs.release_mode != true }}
     steps:
       - name: Delete secrets artifact
         uses: geekyeggo/delete-artifact@v5
         with:
-          name: encrypted-secrets-zip
+          name: encrypted-secrets-zip-windows

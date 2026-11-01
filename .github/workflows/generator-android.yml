@@ -18,6 +18,37 @@ on:
         required: false
         default: ''
         type: string
+      release_mode:
+        description: 'Build assets for the automatic GitHub Release workflow'
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      version:
+        description: RustDesk release tag selected by RDGen upstream
+        required: true
+        type: string
+      zip_url:
+        description: Existing RDGen encrypted configuration URL JSON
+        required: false
+        default: ''
+        type: string
+      app_version:
+        description: Optional custom app version string
+        required: false
+        default: ''
+        type: string
+      release_mode:
+        description: Build assets for the automatic GitHub Release workflow
+        required: false
+        default: false
+        type: boolean
+      secrets_json_b64:
+        description: Base64-encoded RDGen build configuration JSON
+        required: false
+        default: ''
+        type: string
 
 
 env:
@@ -31,7 +62,6 @@ env:
   ANDROID_FLUTTER_VERSION: "3.24.5" 
   # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
-  TAG_NAME: "${{ inputs.upload-tag }}"
   VCPKG_BINARY_SOURCES: "clear"
   # vcpkg version: 2024.07.12
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
@@ -50,11 +80,14 @@ jobs:
     uses: ./.github/workflows/fetch-encrypted-secrets.yml
     with:
       zip_url_json: ${{ inputs.zip_url }}
+      secrets_json_b64: ${{ inputs.secrets_json_b64 }}
+      artifact_name: encrypted-secrets-zip-android
 
   generate-bridge-linux:
     uses: ./.github/workflows/bridge.yml
     with:
       version: ${{ inputs.version }}
+      artifact_name: bridge-artifact-android
 
   build-rustdesk-android:
     needs: [generate-bridge-linux, setup]
@@ -91,7 +124,7 @@ jobs:
         
       - uses: actions/download-artifact@v4
         with:
-          name: encrypted-secrets-zip
+          name: encrypted-secrets-zip-android
 
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
@@ -99,7 +132,7 @@ jobs:
           zip_password: ${{ secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
-        if: always() # Run even if previous steps fail
+        if: ${{ always() && inputs.release_mode != true }}
         continue-on-error: true
         uses: fjogeleit/http-request-action@v1
         with:
@@ -120,19 +153,19 @@ jobs:
           swap-storage: false
 
       - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
       - name: Set rdgen value
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'true' }}
         run: |
           echo "STATUS_URL=${{ secrets.GENURL }}/updategh" >> $GITHUB_ENV
 
       - name: Set rdgen value
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'false' }}
         run: |
           echo "STATUS_URL=${{ env.apiServer }}/api/updategh" >> $GITHUB_ENV
 
@@ -303,7 +336,7 @@ jobs:
       - name: Restore bridge files
         uses: actions/download-artifact@master
         with:
-          name: bridge-artifact
+          name: bridge-artifact-android
           path: ./
 
       - name: Install Rust toolchain
@@ -697,8 +730,17 @@ jobs:
           fi
           ls -l ./signed-apk/
 
+      - name: Upload Android release APK
+        if: ${{ inputs.release_mode == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android-${{ matrix.job.arch }}-${{ env.VERSION }}
+          path: ./signed-apk/${{ env.filename }}-${{ matrix.job.arch }}.apk
+          if-no-files-found: error
+          retention-days: 7
+
       - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'true' }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
@@ -709,7 +751,7 @@ jobs:
             curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./signed-apk/${{ env.filename }}-${{ matrix.job.arch }}.apk" -F "uuid=${{ env.uuid }}" ${{ secrets.GENURL }}/save_custom_client
 
       - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'false' }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
@@ -721,6 +763,7 @@ jobs:
 
   deploy:
     needs: [build-rustdesk-android]
+    if: ${{ inputs.release_mode != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -728,7 +771,7 @@ jobs:
         
       - uses: actions/download-artifact@v4
         with:
-          name: encrypted-secrets-zip
+          name: encrypted-secrets-zip-android
 
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
@@ -736,7 +779,7 @@ jobs:
           zip_password: ${{ secrets.ZIP_PASSWORD }}
 
       - name: Finalize and Cleanup zip/json
-        if: always() # Run even if previous steps fail
+        if: ${{ always() && inputs.release_mode != true }}
         continue-on-error: true
         uses: fjogeleit/http-request-action@v1
         with:
@@ -746,12 +789,12 @@ jobs:
           data: '{"uuid": "${{ env.uuid }}"}'
 
       - name: Set rdgen value
-        if: ${{ env.rdgen == 'true' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'true' }}
         run: |
           echo "STATUS_URL=${{ secrets.GENURL }}/updategh" >> $GITHUB_ENV
 
       - name: Set rdgen value
-        if: ${{ env.rdgen == 'false' }}
+        if: ${{ inputs.release_mode != true && env.rdgen == 'false' }}
         run: |
           echo "STATUS_URL=${{ env.apiServer }}/api/updategh" >> $GITHUB_ENV
 
@@ -764,9 +807,9 @@ jobs:
     needs: [build-rustdesk-android, deploy]
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: always()
+    if: ${{ always() && inputs.release_mode != true }}
     steps:
       - name: Delete secrets artifact
         uses: geekyeggo/delete-artifact@v5
         with:
-          name: encrypted-secrets-zip
+          name: encrypted-secrets-zip-android
