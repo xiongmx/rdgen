@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '17 */6 * * *'
   workflow_dispatch:
+    inputs:
+      rebuild_version:
+        description: 'Optional one-time rebuild of a currently RDGen-supported version with no existing Release tag'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -26,10 +31,17 @@ jobs:
 
       - name: Compare RDGen-supported versions with completed Releases
         id: detect
-        run: python3 .github/scripts/rdgen_release.py detect
+        run: |
+          if [[ "$EVENT_TYPE" == "workflow_dispatch" && -n "$REBUILD_VERSION" ]]; then
+            python3 .github/scripts/rdgen_release.py detect --manual-version "$REBUILD_VERSION"
+          else
+            python3 .github/scripts/rdgen_release.py detect
+          fi
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_TYPE: ${{ github.event_name }}
+          REBUILD_VERSION: ${{ inputs.rebuild_version }}
           RDGEN_BASELINE_VERSION: ${{ vars.RDGEN_BASELINE_VERSION }}
 
   config:

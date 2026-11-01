@@ -13,6 +13,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 UPSTREAM_OWNER = "bryangerlach"
 UPSTREAM_REPO = "rdgen"
@@ -103,6 +104,19 @@ def select_build_version(
     return latest_supported if version_key(latest_supported) > version_key(latest_watermark) else None
 
 
+def select_manual_build_version(
+    requested: str, supported: list[str], releases: list[dict[str, Any]]
+) -> str:
+    """Allow an explicit workflow-dispatch rebuild only for supported, unpublished tags."""
+    version_key(requested)
+    if requested not in supported:
+        raise ValueError("Requested manual version is not currently supported by RDGen")
+    target_tag = f"{RELEASE_PREFIX}{requested}"
+    if any(isinstance(release, dict) and release.get("tag_name") == target_tag for release in releases):
+        raise ValueError("Requested manual release tag already exists; refusing to overwrite it")
+    return requested
+
+
 def _request_json(url: str, token: str = "") -> Any:
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "rdgen-release-watcher"}
     if token:
@@ -112,7 +126,7 @@ def _request_json(url: str, token: str = "") -> Any:
         return json.loads(response.read())
 
 
-def detect_remote() -> tuple[str | None, str]:
+def detect_remote(manual_version: str = "") -> tuple[str | None, str]:
     token = os.environ.get("GITHUB_TOKEN", "")
     forms_url = f"https://raw.githubusercontent.com/{UPSTREAM_OWNER}/{UPSTREAM_REPO}/refs/heads/{UPSTREAM_BRANCH}/rdgenerator/forms.py"
     source_request = urllib.request.Request(forms_url, headers={"User-Agent": "rdgen-release-watcher"})
@@ -133,10 +147,13 @@ def detect_remote() -> tuple[str | None, str]:
     if not isinstance(upstream_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", upstream_sha):
         upstream_sha = "unknown"
 
-    baseline = os.environ.get("RDGEN_BASELINE_VERSION", "")
-    return select_build_version(
-        extract_supported_versions(source), published_versions(releases), baseline
-    ), upstream_sha
+    supported = extract_supported_versions(source)
+    if manual_version:
+        version = select_manual_build_version(manual_version, supported, releases)
+    else:
+        baseline = os.environ.get("RDGEN_BASELINE_VERSION", "")
+        version = select_build_version(supported, published_versions(releases), baseline)
+    return version, upstream_sha
 
 
 def build_config() -> dict[str, str]:
@@ -201,14 +218,16 @@ def write_github_output(values: dict[str, str]) -> None:
             output.write(f"{key}={value}\n")
 
 
-def command_detect() -> None:
-    version, upstream_sha = detect_remote()
+def command_detect(manual_version: str = "") -> None:
+    version, upstream_sha = detect_remote(manual_version)
     write_github_output({
         "build_needed": "true" if version else "false",
         "version": version or "",
         "upstream_sha": upstream_sha,
     })
-    if version:
+    if manual_version and version:
+        print(f"Manual rebuild requested for RDGen-supported tag: {version} (RDGen commit {upstream_sha})")
+    elif version:
         print(f"RDGen supports a new RustDesk build tag: {version} (RDGen commit {upstream_sha})")
     else:
         print("No newer stable RustDesk version is currently supported by RDGen upstream.")
@@ -231,14 +250,15 @@ def command_config_file(path: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("detect", help="Poll the upstream RDGen support list and this repo's Releases")
+    detect = subparsers.add_parser("detect", help="Poll upstream support, or validate a manually requested version")
+    detect.add_argument("--manual-version", default="", help="Manual rebuild version; use only for explicit workflow_dispatch runs")
     subparsers.add_parser("config", help="Validate the GitHub Environment and emit config JSON output")
     config_file = subparsers.add_parser("config-file", help="Write config JSON locally for tests")
     config_file.add_argument("path")
     args = parser.parse_args()
     try:
         if args.command == "detect":
-            command_detect()
+            command_detect(args.manual_version)
         elif args.command == "config":
             command_config()
         else:

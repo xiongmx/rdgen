@@ -38,6 +38,20 @@ class GenerateForm(forms.Form):
             "1.5.1",
         )
 
+    def test_manual_rebuild_can_select_supported_baseline_when_no_release_exists(self):
+        self.assertEqual(
+            rdgen_release.select_manual_build_version("1.5.0", ["1.5.0"], []),
+            "1.5.0",
+        )
+
+    def test_manual_rebuild_rejects_unsupported_or_existing_release(self):
+        with self.assertRaises(ValueError):
+            rdgen_release.select_manual_build_version("1.5.1", ["1.5.0"], [])
+        with self.assertRaises(ValueError):
+            rdgen_release.select_manual_build_version(
+                "1.5.0", ["1.5.0"], [{"tag_name": "rdgen-rustdesk-1.5.0", "assets": []}]
+            )
+
     def test_ignores_non_rdgen_and_non_stable_release_tags(self):
         releases = [
             {"tag_name": "v9.9.9"},
