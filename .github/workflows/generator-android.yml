@@ -394,6 +394,7 @@ jobs:
           SERVER_PORT_INPUT: ${{ env.serverPort }}
           SERVER_KEY: ${{ env.key }}
           API_SERVER: ${{ env.apiServer }}
+          CUSTOM_CLIENT_PUBLIC_KEY: ${{ env.customClientPublicKey }}
         run: |
           python3 "$RUNNER_TEMP/inject_rustdesk_config.py" patch-source
           
@@ -488,7 +489,7 @@ jobs:
           sed -i -e 's|https://rustdesk.com/download|${{ env.downloadLink }}|' ./flutter/lib/mobile/pages/connection_page.dart
           sed -i -e 's|https://rustdesk.com/download|${{ env.downloadLink }}|' ./src/ui/index.tis
 
-      - name: allow custom.txt
+      - name: Stage signed custom config and hide setup-server tip
         if: ${{ env.custom != '' }}
         uses: nick-fields/retry@v3
         with:
@@ -497,8 +498,6 @@ jobs:
           retry_wait_seconds: 15
           shell: bash
           command: |
-            wget https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/allowCustom.py
-            python allowCustom.py
             wget https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/removeSetupServerTip.diff
             git apply removeSetupServerTip.diff
             echo -n '${{ env.custom }}' > ./custom_.txt
@@ -710,6 +709,8 @@ jobs:
           SERVER_PORT_INPUT: ${{ env.serverPort }}
           SERVER_KEY: ${{ env.key }}
           API_SERVER: ${{ env.apiServer }}
+          CUSTOM_CLIENT_CONFIG: ${{ env.custom }}
+          CUSTOM_CLIENT_PUBLIC_KEY: ${{ env.customClientPublicKey }}
         run: |
           python3 "$RUNNER_TEMP/inject_rustdesk_config.py" verify-apk \
             --apk "./signed-apk/${{ env.filename }}-${{ matrix.job.arch }}.apk"

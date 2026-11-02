@@ -315,10 +315,11 @@ jobs:
           SERVER_PORT_INPUT: ${{ env.serverPort }}
           SERVER_KEY: ${{ env.key }}
           API_SERVER: ${{ env.apiServer }}
+          CUSTOM_CLIENT_PUBLIC_KEY: ${{ env.customClientPublicKey }}
         run: |
           python "$RUNNER_TEMP/inject_rustdesk_config.py" patch-source
 
-      - name: allow custom.txt
+      - name: Hide setup-server tip for custom client
         if: ${{ env.custom != '' }}
         uses: nick-fields/retry@v3
         with:
@@ -327,8 +328,6 @@ jobs:
           retry_wait_seconds: 15
           shell: pwsh
           command: |
-            Invoke-WebRequest -Uri https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/allowCustom.py -OutFile allowCustom.py
-            python allowCustom.py
             # Remove Setup Server Tip
             Invoke-WebRequest -Uri https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/removeSetupServerTip.diff -OutFile removeSetupServerTip.diff
             git apply removeSetupServerTip.diff

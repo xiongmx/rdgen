@@ -1,6 +1,10 @@
+import base64
 import importlib.util
+import json
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -59,7 +63,7 @@ class GenerateForm(forms.Form):
             {"tag_name": "rdgen-rustdesk-1.5.0", "assets": [{"name": "rustdesk.exe"}]},
             {
                 "tag_name": "rdgen-rustdesk-1.4.9",
-                "assets": [{"name": "rustdesk.exe"}, {"name": "rustdesk-arm64.apk"}],
+                "assets": [{"name": "rustdesk.exe"}, {"name": "rustdesk-armv7.apk"}],
             },
         ]
         self.assertEqual(rdgen_release.published_versions(releases), ["1.4.9"])
@@ -70,39 +74,166 @@ class GenerateForm(forms.Form):
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_fixed_server_values_are_emitted_without_unsigned_custom_payload(self):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.private_key_path = Path(cls.temp.name) / "test-signing-key.pem"
+        subprocess.run(
+            ["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(cls.private_key_path)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        cls.private_key = cls.private_key_path.read_text(encoding="ascii")
+        cls.server_key = base64.b64encode(bytes(range(32))).decode("ascii")
+        cls.form_config = {
+            "platform": "windows",
+            "version": "1.4.2",
+            "serverIP": "rd.example.test",
+            "serverPort": "",
+            "key": cls.server_key,
+            "apiServer": "https://api.example.test",
+            "appname": "rustdesk",
+            "exename": "rustdesk",
+            "compname": "Example Co",
+            "androidappid": "com.example.rustdesk",
+            "urlLink": "https://example.test",
+            "downloadLink": "https://example.test/download",
+            "direction": "both",
+            "installation": "installationY",
+            "settings": "settingsY",
+            "permissionsDorO": "default",
+            "permissionsType": "full",
+            "theme": "system",
+            "themeDorO": "default",
+            "passApproveMode": "password-click",
+            "permanentPassword": " password with spaces ",
+            "defaultManual": "",
+            "overrideManual": "",
+            "autoClose": False,
+            "cycleMonitor": False,
+            "denyLan": False,
+            "delayFix": "on",
+            "xOffline": "on",
+            "removeNewVersionNotif": "on",
+            "enableAudio": "on",
+            "enableBlockingInput": "on",
+            "enableCamera": "on",
+            "enableClipboard": "on",
+            "enableDirectIP": "on",
+            "enableFileTransfer": "on",
+            "enableKeyboard": "on",
+            "enablePrinter": "on",
+            "enableRecording": "on",
+            "enableRemoteModi": "off",
+            "enableRemoteRestart": "on",
+            "enableTCP": "on",
+            "enableTerminal": "on",
+            "hidecm": "on",
+            "removeWallpaper": "on",
+            "iconbase64": "",
+            "logobase64": "",
+            "privacybase64": "",
+        }
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def build_with(self, config):
         env = {
-            "RUSTDESK_SERVER": "rustdesk.xiongmx.com",
-            "RUSTDESK_SERVER_PORT": "21116",
-            "RUSTDESK_API_SERVER": "https://rustdesk.xiongmx.com",
-            "RUSTDESK_PUBLIC_KEY": "LOesLO6ZiBDbvmrUhwMjjTl240UQWziRe7nWrvmOpdY=",
+            rdgen_release.CONFIG_SECRET_ENV: base64.b64encode(
+                json.dumps(config).encode("utf-8")
+            ).decode("ascii"),
+            rdgen_release.SIGNING_KEY_ENV: self.private_key,
         }
         with mock.patch.dict(os.environ, env, clear=True):
-            config = rdgen_release.build_config()
-        self.assertEqual(config["server"], env["RUSTDESK_SERVER"])
+            return rdgen_release.build_config()
+
+    def test_emits_full_saved_settings_as_valid_signed_payload(self):
+        config = self.build_with(self.form_config)
+        self.assertEqual(config["server"], "rd.example.test")
         self.assertEqual(config["serverPort"], "21116")
-        self.assertEqual(config["apiServer"], env["RUSTDESK_API_SERVER"])
-        self.assertEqual(config["key"], env["RUSTDESK_PUBLIC_KEY"])
-        self.assertEqual(config["custom"], "")
+        self.assertEqual(config["apiServer"], "https://api.example.test")
+        self.assertEqual(config["key"], self.server_key)
+        self.assertEqual(config["appname"], "rustdesk")
+        self.assertEqual(config["compname"], "Example Co")
+        self.assertEqual(config["androidappid"], "com.example.rustdesk")
+        self.assertEqual(config["delayFix"], "true")
+        self.assertEqual(config["xOffline"], "true")
+        self.assertEqual(config["removeNewVersionNotif"], "true")
+        self.assertEqual(config["cycleMonitor"], "false")
         self.assertEqual(config["rdgen"], "false")
         self.assertEqual(config["genurl"], "")
+        self.assertNotIn("version", config)
 
-    def test_rejects_invalid_port_and_key(self):
-        base = {
-            "RUSTDESK_SERVER": "rustdesk.xiongmx.com",
-            "RUSTDESK_SERVER_PORT": "21116",
-            "RUSTDESK_API_SERVER": "https://rustdesk.xiongmx.com",
-            "RUSTDESK_PUBLIC_KEY": "LOesLO6ZiBDbvmrUhwMjjTl240UQWziRe7nWrvmOpdY=",
-        }
-        for field, value in (
-            ("RUSTDESK_SERVER_PORT", "bad"),
-            ("RUSTDESK_SERVER_PORT", "65533"),
-            ("RUSTDESK_PUBLIC_KEY", "invalid"),
+        signed = base64.b64decode(config["custom"], validate=True)
+        signature, payload = signed[:64], signed[64:]
+        custom = json.loads(payload.decode("utf-8"))
+        self.assertEqual(custom["password"], " password with spaces ")
+        self.assertEqual(custom["default-settings"]["access-mode"], "full")
+        self.assertEqual(custom["default-settings"]["enable-keyboard"], "Y")
+        self.assertEqual(custom["default-settings"]["enable-file-transfer"], "Y")
+        self.assertEqual(custom["default-settings"]["direct-server"], "Y")
+        self.assertEqual(custom["default-settings"]["verification-method"], "use-permanent-password")
+        self.assertEqual(custom["override-settings"], {})
+        self.assertEqual(custom["enable-lan-discovery"], "Y")
+        self.assertEqual(custom["allow-auto-disconnect"], "N")
+
+        public_der = subprocess.run(
+            ["openssl", "pkey", "-in", str(self.private_key_path), "-pubout", "-outform", "DER"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout
+        expected_public = base64.b64encode(public_der[-32:]).decode("ascii")
+        self.assertEqual(config["customClientPublicKey"], expected_public)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload_path = root / "payload"
+            signature_path = root / "signature"
+            public_path = root / "public.pem"
+            payload_path.write_bytes(payload)
+            signature_path.write_bytes(signature)
+            subprocess.run(
+                ["openssl", "pkey", "-in", str(self.private_key_path), "-pubout", "-out", str(public_path)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            subprocess.run(
+                ["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-inkey", str(public_path), "-in", str(payload_path), "-sigfile", str(signature_path)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        self.assertNotIn("BEGIN PRIVATE KEY", json.dumps(config))
+
+    def test_honors_override_mode_when_the_saved_file_requests_it(self):
+        source = {**self.form_config, "permissionsDorO": "override"}
+        custom = json.loads(base64.b64decode(self.build_with(source)["custom"])[64:].decode())
+        self.assertIn("access-mode", custom["override-settings"])
+        self.assertNotIn("access-mode", custom["default-settings"])
+
+    def test_rejects_missing_secrets_unknown_fields_and_unhandled_images(self):
+        with mock.patch.dict(os.environ, {}, clear=True), self.assertRaises(ValueError):
+            rdgen_release.build_config()
+        with self.assertRaises(ValueError):
+            self.build_with({**self.form_config, "unexpectedNewField": "x"})
+        with self.assertRaises(ValueError):
+            self.build_with({**self.form_config, "iconbase64": "not-empty"})
+
+    def test_rejects_invalid_saved_server_config(self):
+        for patch in (
+            {"serverPort": "bad"},
+            {"serverPort": "65533"},
+            {"serverIP": "invalid|host"},
+            {"key": "invalid"},
+            {"apiServer": "http://api.example.test"},
         ):
-            env = {**base, field: value}
-            with self.subTest(field=field), mock.patch.dict(os.environ, env, clear=True):
+            with self.subTest(patch=sorted(patch)):
                 with self.assertRaises(ValueError):
-                    rdgen_release.build_config()
+                    self.build_with({**self.form_config, **patch})
 
 
 if __name__ == "__main__":

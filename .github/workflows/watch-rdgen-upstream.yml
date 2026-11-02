@@ -59,10 +59,8 @@ jobs:
         id: config
         run: python3 .github/scripts/rdgen_release.py config
         env:
-          RUSTDESK_SERVER: ${{ vars.RUSTDESK_SERVER }}
-          RUSTDESK_SERVER_PORT: ${{ vars.RUSTDESK_SERVER_PORT }}
-          RUSTDESK_API_SERVER: ${{ vars.RUSTDESK_API_SERVER }}
-          RUSTDESK_PUBLIC_KEY: ${{ vars.RUSTDESK_PUBLIC_KEY }}
+          RUSTDESK_CLIENT_CONFIG_JSON_B64: ${{ secrets.RUSTDESK_CLIENT_CONFIG_JSON_B64 }}
+          RUSTDESK_CUSTOM_CLIENT_SIGNING_PRIVATE_KEY: ${{ secrets.RUSTDESK_CUSTOM_CLIENT_SIGNING_PRIVATE_KEY }}
 
   build_windows_x64:
     needs: [detect, config]
@@ -127,7 +125,7 @@ jobs:
             - Android: armv7 APK only
             - RDGen upstream commit at detection time: `${{ needs.detect.outputs.upstream_sha }}`
 
-            Server settings are embedded from the `rustdesk` GitHub Environment.
+            The saved client settings are embedded from the `rustdesk` GitHub Environment and the custom payload is Ed25519-signed.
           files: release-assets/*
           fail_on_unmatched_files: true
           overwrite_files: true

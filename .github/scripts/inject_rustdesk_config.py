@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch RustDesk server defaults and verify the built Android APK contains them."""
+"""Patch RustDesk defaults and verify signed configuration in the built Android APK."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ import base64
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -16,6 +18,8 @@ from urllib.parse import urlsplit
 DEFAULT_RENDEZVOUS_HOST = "rs-ny.rustdesk.com"
 DEFAULT_PUBLIC_KEY = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw="
 DEFAULT_API_SERVER = "https://admin.rustdesk.com"
+DEFAULT_CUSTOM_CLIENT_PUBLIC_KEY = "5Qbwsde3unUcJBtrx9ZkvUmwFNoExHzpryHuPUdqlWM="
+ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 PORT_CONSTANTS = (
     "RENDEZVOUS_PORT",
     "RELAY_PORT",
@@ -43,6 +47,16 @@ def validate_config(server: str, port_text: str, public_key: str, api_server: st
     ):
         raise ValueError("API_SERVER must be a valid HTTPS URL")
     return int(port_text)
+
+
+def validate_custom_client_public_key(public_key: str) -> bytes:
+    try:
+        raw = base64.b64decode(public_key, validate=True)
+    except Exception as exc:
+        raise ValueError("CUSTOM_CLIENT_PUBLIC_KEY is not valid base64") from exc
+    if len(raw) != 32:
+        raise ValueError("CUSTOM_CLIENT_PUBLIC_KEY must decode to a 32-byte Ed25519 public key")
+    return raw
 
 
 def _replace_one(text: str, old: str, new: str, label: str) -> str:
@@ -80,32 +94,31 @@ def _default_settings_initializer(server: str, public_key: str, api_server: str)
             f"        settings.insert({_rust_string_literal(name)}.to_owned(), "
             f"{_rust_string_literal(value)}.to_owned());"
         )
-    lines.extend(("        RwLock::new(settings)", "    };"))
+    lines.extend(("        RwLock::new(settings)", "    };") )
     return "\n".join(lines)
 
 
-def patch_source(root: Path, server: str, port_text: str, public_key: str, api_server: str) -> None:
+def patch_source(
+    root: Path,
+    server: str,
+    port_text: str,
+    public_key: str,
+    api_server: str,
+    custom_client_public_key: str,
+) -> None:
     port = validate_config(server, port_text, public_key, api_server)
+    custom_public_key_bytes = validate_custom_client_public_key(custom_client_public_key)
     config_path = root / "libs/hbb_common/src/config.rs"
+    if not config_path.is_file():
+        raise ValueError("RustDesk config.rs source file is missing")
     common_path = root / "src/common.rs"
-    if not config_path.is_file() or not common_path.is_file():
-        raise ValueError("RustDesk config.rs or common.rs source file is missing")
+    if not common_path.is_file():
+        raise ValueError("RustDesk common.rs source file is missing")
 
     config_text = config_path.read_text(encoding="utf-8")
     common_text = common_path.read_text(encoding="utf-8")
-
-    config_text = _replace_one(
-        config_text,
-        DEFAULT_RENDEZVOUS_HOST,
-        server,
-        "rendezvous host",
-    )
-    config_text = _replace_one(
-        config_text,
-        DEFAULT_PUBLIC_KEY,
-        public_key,
-        "public key",
-    )
+    config_text = _replace_one(config_text, DEFAULT_RENDEZVOUS_HOST, server, "rendezvous host")
+    config_text = _replace_one(config_text, DEFAULT_PUBLIC_KEY, public_key, "server public key")
     for offset, name in enumerate(PORT_CONSTANTS):
         config_text = _replace_port(config_text, name, port + offset)
     config_text = _replace_one(
@@ -115,14 +128,28 @@ def patch_source(root: Path, server: str, port_text: str, public_key: str, api_s
         "DEFAULT_SETTINGS initializer",
     )
 
-    api_count = common_text.count(DEFAULT_API_SERVER)
-    if api_count < 1:
+    if DEFAULT_API_SERVER not in common_text:
         raise ValueError("Default API server placeholder is missing from common.rs")
     common_text = common_text.replace(DEFAULT_API_SERVER, api_server)
+    common_text = _replace_one(
+        common_text,
+        f'const KEY: &str = "{DEFAULT_CUSTOM_CLIENT_PUBLIC_KEY}";',
+        f'const KEY: &str = "{custom_client_public_key}";',
+        "custom-client signature verification public key",
+    )
+    common_text = _replace_one(
+        common_text,
+        'std::fs::read_to_string("./custom.txt")',
+        'std::fs::read_to_string("./custom_.txt")',
+        "debug custom-client config path",
+    )
+    common_text = _replace_one(
+        common_text,
+        'path.join("custom.txt")',
+        'path.join("custom_.txt")',
+        "custom-client config path",
+    )
 
-    # Validate every replacement before writing either source file.
-    if server not in config_text or public_key not in config_text:
-        raise ValueError("Server host or public key did not survive source replacement")
     expected_ports = [port + offset for offset in range(len(PORT_CONSTANTS))]
     for name, value in zip(PORT_CONSTANTS, expected_ports):
         expected = f"pub const {name}: i32 = {value};"
@@ -143,14 +170,76 @@ def patch_source(root: Path, server: str, port_text: str, public_key: str, api_s
             raise ValueError(f"Verified default setting {name} is missing after replacement")
     if api_server not in common_text:
         raise ValueError("API server URL did not survive source replacement")
+    if base64.b64encode(custom_public_key_bytes).decode("ascii") not in common_text:
+        raise ValueError("Custom-client public key did not survive source replacement")
+    if "sign::verify(&data, &pk)" not in common_text:
+        raise ValueError("RustDesk custom-client signature verification was removed")
+    if '"./custom.txt"' in common_text or 'path.join("custom.txt")' in common_text:
+        raise ValueError("Old custom-client file path remains after replacement")
 
     config_path.write_text(config_text, encoding="utf-8")
     common_path.write_text(common_text, encoding="utf-8")
-    print("Verified source replacements and defaults for ID, relay, API, key, and all four ports.")
+    print("Verified server defaults, all four ports, custom-client public key, and retained signature verification.")
 
 
-def verify_android_apk(apk_path: Path, server: str, port_text: str, public_key: str, api_server: str) -> None:
+def _verify_signed_custom_payload(custom_config: str, custom_public_key: str) -> bytes:
+    public_raw = validate_custom_client_public_key(custom_public_key)
+    try:
+        signed = base64.b64decode(custom_config, validate=True)
+    except Exception as exc:
+        raise ValueError("CUSTOM_CLIENT_CONFIG is not valid base64") from exc
+    if len(signed) <= 64:
+        raise ValueError("CUSTOM_CLIENT_CONFIG does not contain a signed JSON payload")
+    signature, payload = signed[:64], signed[64:]
+    with tempfile.TemporaryDirectory(prefix="rdgen-custom-verify-") as directory:
+        root = Path(directory)
+        public_der = root / "public.der"
+        public_pem = root / "public.pem"
+        signature_path = root / "signature.bin"
+        payload_path = root / "payload.bin"
+        public_der.write_bytes(ED25519_SPKI_PREFIX + public_raw)
+        signature_path.write_bytes(signature)
+        payload_path.write_bytes(payload)
+        try:
+            converted = subprocess.run(
+                ["openssl", "pkey", "-pubin", "-inform", "DER", "-in", str(public_der), "-out", str(public_pem)],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            verified = subprocess.run(
+                [
+                    "openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-inkey", str(public_pem),
+                    "-in", str(payload_path), "-sigfile", str(signature_path),
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ) if converted.returncode == 0 else converted
+        except FileNotFoundError as exc:
+            raise ValueError("OpenSSL is required to verify the custom client signature") from exc
+        if converted.returncode != 0 or verified.returncode != 0:
+            raise ValueError("CUSTOM_CLIENT_CONFIG signature is invalid")
+    try:
+        parsed = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Signed custom-client payload is not valid UTF-8 JSON") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Signed custom-client payload must be a JSON object")
+    return payload
+
+
+def verify_android_apk(
+    apk_path: Path,
+    server: str,
+    port_text: str,
+    public_key: str,
+    api_server: str,
+    custom_config: str,
+    custom_public_key: str,
+) -> None:
     validate_config(server, port_text, public_key, api_server)
+    _verify_signed_custom_payload(custom_config, custom_public_key)
     if not apk_path.is_file():
         raise ValueError("Android APK does not exist")
     with zipfile.ZipFile(apk_path) as apk:
@@ -175,13 +264,12 @@ def verify_android_apk(apk_path: Path, server: str, port_text: str, public_key: 
         if unexpected:
             raise ValueError("APK contains unexpected server setting(s): " + ", ".join(unexpected))
 
-        # Auto-release configuration has no RDGen signing key, so no custom-client
-        # payload is generated. Reject a non-empty asset instead of shipping an
-        # unsigned blob that RustDesk's read_custom_client() will refuse.
-        assets = [name for name in names if name.endswith("/assets/custom_.txt")]
-        if any(apk.read(name).strip() for name in assets):
-            raise ValueError("APK contains an unexpected unsigned custom-client payload")
-    print("Verified Android APK contains host-only ID defaults, blank relay, API, and key.")
+        custom_assets = [name for name in names if name.endswith("custom_.txt")]
+        if len(custom_assets) != 1:
+            raise ValueError("APK must contain exactly one signed custom_.txt asset")
+        if apk.read(custom_assets[0]).strip() != custom_config.encode("ascii"):
+            raise ValueError("APK custom-client asset does not match the signed configuration")
+    print("Verified APK embeds the fixed server defaults and the expected signed client settings.")
 
 
 def required_env(name: str) -> str:
@@ -206,10 +294,16 @@ def main() -> int:
             required_env("SERVER_KEY"),
             required_env("API_SERVER"),
         )
+        custom_public_key = required_env("CUSTOM_CLIENT_PUBLIC_KEY")
         if args.command == "patch-source":
-            patch_source(args.root, *values)
+            patch_source(args.root, *values, custom_public_key)
         else:
-            verify_android_apk(args.apk, *values)
+            verify_android_apk(
+                args.apk,
+                *values,
+                required_env("CUSTOM_CLIENT_CONFIG"),
+                custom_public_key,
+            )
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         print(f"Configuration injection failed: {exc}", file=sys.stderr)
         return 1
