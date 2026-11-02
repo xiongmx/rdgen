@@ -473,12 +473,31 @@ jobs:
           grep -n 'FFI.startServer(configPath' "$KOTLIN" | sed 's/\(.\{80\}\).*/\1.../'
           grep -n 'customClientConfig:' "$DART" | sed 's/\(.\{80\}\).*/\1.../'
 
-      - name: change app id to custom
+      - name: Set Android application ID without changing namespace
         if: env.androidappid != 'com.carriez.flutter_hbb'
-        continue-on-error: true
         shell: bash
+        env:
+          ANDROID_APPLICATION_ID: ${{ env.androidappid }}
         run: |
-          sed -i -e 's|com.carriez.flutter_hbb|${{ env.androidappid }}|' ./flutter/android/app/build.gradle
+          python3 - <<'PY'
+          import os, pathlib, re, sys
+
+          application_id = os.environ["ANDROID_APPLICATION_ID"]
+          if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+", application_id):
+              raise SystemExit("Invalid Android application ID")
+
+          path = pathlib.Path("./flutter/android/app/build.gradle")
+          text = path.read_text(encoding="utf-8")
+          application_id_line = 'applicationId "com.carriez.flutter_hbb"'
+          namespace_line = 'namespace "com.carriez.flutter_hbb"'
+          if text.count(application_id_line) != 1:
+              raise SystemExit("Expected exactly one default Android applicationId")
+          if text.count(namespace_line) != 1:
+              raise SystemExit("Expected exactly one RustDesk Android namespace")
+          text = text.replace(application_id_line, f'applicationId "{application_id}"', 1)
+          path.write_text(text, encoding="utf-8")
+          print("Android applicationId updated; RustDesk namespace preserved.")
+          PY
 
       - name: change download link to custom
         if: env.downloadLink != 'https://rustdesk.com/download'
