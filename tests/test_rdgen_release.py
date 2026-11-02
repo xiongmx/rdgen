@@ -110,6 +110,7 @@ class ConfigurationTests(unittest.TestCase):
             "permanentPassword": " password with spaces ",
             "defaultManual": "",
             "overrideManual": "",
+            "overrideSettingsExclusions": [],
             "autoClose": False,
             "cycleMonitor": False,
             "denyLan": False,
@@ -215,11 +216,27 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("access-mode", custom["override-settings"])
         self.assertNotIn("access-mode", custom["default-settings"])
 
+    def test_excludes_recent_sessions_sync_from_override_and_preserves_other_settings(self):
+        source = {
+            **self.form_config,
+            "permissionsDorO": "override",
+            "overrideSettingsExclusions": ["sync-ab-with-recent-sessions"],
+            "defaultManual": "sync-ab-with-recent-sessions=N",
+            "overrideManual": "sync-ab-with-recent-sessions=Y\ncustom-manual-setting=keep",
+        }
+        custom = json.loads(base64.b64decode(self.build_with(source)["custom"])[64:].decode())
+        self.assertNotIn("sync-ab-with-recent-sessions", custom["override-settings"])
+        self.assertEqual(custom["default-settings"]["sync-ab-with-recent-sessions"], "N")
+        self.assertEqual(custom["override-settings"]["custom-manual-setting"], "keep")
+        self.assertIn("enable-keyboard", custom["override-settings"])
+
     def test_rejects_missing_secrets_unknown_fields_and_unhandled_images(self):
         with mock.patch.dict(os.environ, {}, clear=True), self.assertRaises(ValueError):
             rdgen_release.build_config()
         with self.assertRaises(ValueError):
             self.build_with({**self.form_config, "unexpectedNewField": "x"})
+        with self.assertRaises(ValueError):
+            self.build_with({**self.form_config, "overrideSettingsExclusions": "sync-ab-with-recent-sessions"})
         with self.assertRaises(ValueError):
             self.build_with({**self.form_config, "iconbase64": "not-empty"})
 

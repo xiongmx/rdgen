@@ -35,6 +35,7 @@ KNOWN_CONFIG_FIELDS = {
     "passApproveMode", "permanentPassword", "permissionsDorO", "permissionsType",
     "platform", "privacybase64", "removeNewVersionNotif", "removeWallpaper", "serverIP",
     "serverPort", "settings", "theme", "themeDorO", "urlLink", "version", "xOffline",
+    "overrideSettingsExclusions",
 }
 UNSAFE_NAME_CHARS = re.compile(r"[&\\|\x27\"$`\r\n]")
 
@@ -199,6 +200,16 @@ def _string(config: dict[str, Any], field: str, default: str = "", *, strip: boo
     return value.strip() if strip else value
 
 
+def _string_list(config: dict[str, Any], field: str) -> list[str]:
+    value = config.get(field, [])
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+        raise ValueError(f"Saved client configuration field {field} must be a list of non-empty strings")
+    items = [item.strip() for item in value]
+    if len(items) != len(set(items)):
+        raise ValueError(f"Saved client configuration field {field} must not contain duplicates")
+    return items
+
+
 def _checkbox(config: dict[str, Any], field: str, default: bool = False) -> bool:
     value = config.get(field, default)
     if isinstance(value, bool):
@@ -310,6 +321,8 @@ def _client_custom_settings(config: dict[str, Any], server: str, api_server: str
         target["api-server"] = api_server
     custom["default-settings"].update(_parse_manual_settings(_string(config, "defaultManual", strip=False)))
     custom["override-settings"].update(_parse_manual_settings(_string(config, "overrideManual", strip=False)))
+    for setting in _string_list(config, "overrideSettingsExclusions"):
+        custom["override-settings"].pop(setting, None)
     return json.dumps(custom, ensure_ascii=True, separators=(",", ":")).encode("ascii")
 
 
