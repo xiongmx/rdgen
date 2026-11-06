@@ -178,6 +178,10 @@ jobs:
               ".github/scripts/inject_rustdesk_config.py",
               os.path.join(os.environ["RUNNER_TEMP"], "inject_rustdesk_config.py"),
           )
+          shutil.copy2(
+              ".github/patches/xoffline.diff",
+              os.path.join(os.environ["RUNNER_TEMP"], "xoffline.diff"),
+          )
 
       - name: Checkout source code
         if: ${{ env.VERSION != 'master' }}
@@ -527,7 +531,8 @@ jobs:
           shell: pwsh
           continue_on_error: true
           command: |
-            Invoke-WebRequest -Uri https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/xoffline.diff -OutFile xoffline.diff
+            Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'xoffline.diff') -Destination xoffline.diff -Force
+            git apply --check xoffline.diff
             git apply xoffline.diff
 
       - name: removeNewVersionNotif
@@ -536,7 +541,7 @@ jobs:
         shell: bash
         run: | 
           sed -i -e 's|updateUrl.isNotEmpty|false|' ./flutter/lib/desktop/pages/desktop_home_page.dart
-          #sed -i '/let (request, url) =/,/Ok(())/{/Ok(())/!d}' ./src/common.rs
+          # Keep src/common.rs intact; the old range deletion could remove unrelated code after upstream changes.
 
       # - name: run as admin
       #   continue-on-error: true

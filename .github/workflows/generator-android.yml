@@ -212,7 +212,9 @@ jobs:
 
       - name: Preserve config injection helper
         shell: bash
-        run: cp .github/scripts/inject_rustdesk_config.py "$RUNNER_TEMP/inject_rustdesk_config.py"
+        run: |
+          cp .github/scripts/inject_rustdesk_config.py "$RUNNER_TEMP/inject_rustdesk_config.py"
+          cp .github/patches/xoffline.diff "$RUNNER_TEMP/xoffline.diff"
 
       - name: Checkout source code
         if: ${{ env.VERSION != 'master' }}
@@ -538,7 +540,7 @@ jobs:
           grep -n "key.is_empty()" ./src/client.rs || true
 
       - name: use X for offline display instead of orange circle
-        if: env.xOffline == 'true'
+        if: ${{ env.xOffline == 'true' && matrix.job.target == 'armv7-linux-androideabi' }}
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 5
@@ -547,7 +549,8 @@ jobs:
           shell: bash
           continue_on_error: true
           command: |
-            wget https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/xoffline.diff
+            cp "$RUNNER_TEMP/xoffline.diff" xoffline.diff
+            git apply --check xoffline.diff
             git apply xoffline.diff
 
       - name: hide-cm
@@ -568,7 +571,7 @@ jobs:
         if: env.removeNewVersionNotif == 'true'
         run: | 
           sed -i -e 's|updateUrl.isNotEmpty|false|' ./flutter/lib/desktop/pages/desktop_home_page.dart
-          #sed -i '/let (request, url) =/,/Ok(())/{/Ok(())/!d}' ./src/common.rs
+          # Keep src/common.rs intact; the old range deletion could remove unrelated code after upstream changes.
 
       - name: replace flutter icons
         if: ${{ env.iconlink_url != 'false' }}
